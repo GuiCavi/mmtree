@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="UTF-8">
+	<title></title>
+
+	<style>
+		* {
+			margin: 0;
+			padding: 0;
+		}
+		#map {
+			height: 100vh;
+		}
+	</style>
+</head>
+<body>
+
+	<div id="map"></div>
+
+	<script>
+		Array.prototype._shuffle = function() {
+			var j, x, i;
+			for (i = this.length; i; i--) {
+				j = Math.floor(Math.random() * i);
+				x = this[i - 1];
+				this[i - 1] = this[j];
+				this[j] = x;
+			}
+
+			return this;
+		}
+	</script>
+	<script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyB0l3v5wb424suBerS_-1QKJTjPuleHeFE&v=3&libraries=geometry"></script>
+	<script src="colors.js"></script>
+	<script src="cidades.js"></script>
+	<script src="mmtree.js"></script>
+	<script type="text/javascript">
+
+		Distance.geographicalDistance = function(place1, place2) {
+			var l1 = new google.maps.LatLng(place1.location),
+					l2 = new google.maps.LatLng(place2.location);
+
+			var d = google.maps.geometry.spherical.computeDistanceBetween(l1, l2);
+
+			return d/1000;
+		}
+
+		Extractor.simpleExtractor = function(a) {
+			return {
+				location: a.place.location,
+				id: a.id
+			};
+		}
+
+		Config.getInstance().distanceFunction = Distance.geographicalDistance;
+		Config.getInstance().extractorFunction = Extractor.simpleExtractor;
+
+		var map, markers = [], circles = [];
+		var uiElements = {};
+		var largeInfoWindow;
+		var bounds;
+		// var distances = [];
+
+		// function matrix2array(from, to) {
+		// 	if (from > to) {
+		// 		[from, to] = [to, from];
+		// 	}
+		// 	var sum = 1;
+
+		// 	if (from != 0) {
+		// 		for (var i = 2; i <= from+1; i++) {
+		// 			sum += i;
+		// 		}
+		// 	}
+		// 	return distances[(usableCities.length*from+to)-sum];
+		// }
+
+		function initMap() {
+			uiElements.markers = [];
+			uiElements.circles = [];
+
+			largeInfoWindow = new google.maps.InfoWindow();
+			bounds = new google.maps.LatLngBounds();
+
+			map = new google.maps.Map(document.getElementById('map'), {
+				center: usableCities[0].location,
+				zoom: 4,
+				mapTypeControl: false
+			});
+
+			styleMap();
+			drop();
+
+			document.addEventListener('animationend', () => { map.fitBounds(bounds); });
+		}
+
+		function styleMap() {
+			var styles = [
+				{
+					featureType: 'all',
+					elementType: 'labels',
+					stylers: [
+						{ visibility: 'off' }
+					]
+				},
+				{
+					featureType: 'road',
+					stylers: [
+						{ color: '#000000' }
+					]
+				},
+				{
+					featureType: 'landscape',
+					stylers: [
+						{ color: '#000000' }
+					]
+				},
+				{
+					featureType: 'poi',
+					stylers: [
+						{ color: '#000000' }
+					]
+				}
+			];
+
+			map.setOptions({styles: styles});
+		}
+
+		function populateInfoWindow(marker, _window) {
+			if (_window.marker != marker) {
+				_window.marker = marker;
+				_window.setContent(
+					'<h1>'+marker.title+'</h1>' +
+					'<p>'+marker.id+'</p>' +
+					'<pre>'+JSON.stringify(marker.position, null, 2)+'</pre>'
+				);
+				_window.open(map, marker);
+
+				_window.addListener('closeclick', function() {
+					_window.marker = null;
+				});
+			}
+		}
+
+		function drop() {
+			for (var i = 0; i < usableCities.length; i++) {
+				addMarker({
+					place: usableCities[i],
+					timeout: i*100,
+					id: i
+				});
+			}
+		}
+
+		function addMarker(options) {
+			if ('timeout' in options) {
+				setTimeout(putMarker(options), options.timeout);
+			}
+			else {
+				putMarker(options);
+			}
+		}
+
+		function putMarker(options) {
+			var marker = new google.maps.Marker({
+				position: options.place.location,
+				title: options.place.name,
+				map: map,
+				// icon: 'map-marker.png',
+				opacity: 0.2,
+				animation: google.maps.Animation.DROP
+			});
+
+			if ('id' in options) marker['id'] = options.id;
+			markers.push(marker);
+
+			uiElements.markers.push(marker);
+
+			marker.addListener('click', function() {
+				populateInfoWindow(this, largeInfoWindow);
+			});
+
+			marker.addListener('mouseover', function() {
+				if (this._myCircle != null) {
+					var node = this._myCircle.node;
+
+					for (var i = 0; i < node.pivots.length; i++) {
+						markers[node.pivots[i].id]._myCircle.setMap(map);
+						markers[node.pivots[i].id].setOptions({'opacity': 1});
+					}
+				}
+				// if (this._myCircle != null && this._myCircle.getMap() != null) this._myCircle.setMap(null);
+				// else if (this._myCircle != null) this._myCircle.setMap(map);
+			});
+
+			marker.addListener('mouseout', function() {
+				if (this._myCircle != null && this._myCircle.getMap() != null) {
+					var node = this._myCircle.node;
+					for (var i = 0; i < node.pivots.length; i++) {
+						markers[node.pivots[i].id]._myCircle.setMap(null);
+						markers[node.pivots[i].id].setOptions({'opacity': 0.2});
+					}
+				}
+			})
+
+			bounds.extend(marker.position);
+		}
+
+		document.addEventListener('DOMContentLoaded', function() {
+			initMap();
+
+			var mmt = new MMTree(),
+					config = Config.getInstance();
+
+			var pivots = config.calculateBestPivots(usableCities);
+
+			console.log(pivots);
+
+			mmt.insert(config.extractorFunction({
+				place: pivots[0],
+				id: 0
+			}));
+			mmt.insert(config.extractorFunction({
+				place: pivots[1],
+				id: 1
+			}));
+
+			for (var i = 2; i < usableCities.length; i++) {
+				var vector = config.extractorFunction({
+					place: usableCities[i],
+					id: i
+				});
+
+				mmt.insert(vector);
+			}
+
+			console.log(mmt);
+
+			mmt.walk({
+				callback: function(node) {
+					// console.log(node.pivots, node.distanceBetweenPivots);
+
+					var color = getColor(
+						colorMap.colorName[parseInt(Math.random()*(colorMap.colorName.length))],
+						colorMap.colorShade[parseInt(Math.random()*(colorMap.colorShade.length/2))]
+					);
+
+					for (var i = 0; i < node.pivots.length; i++) {
+						if (node.isNodeFullOfPivots().full) {
+							var circle = new google.maps.Circle({
+								strokeColor: color,
+								strokeOpacity: 0.8,
+								strokeWeight: 2,
+								fillColor: color,
+								fillOpacity: 0.135,
+								node: node,
+								center: node.pivots[i].location,
+								radius: node.distanceBetweenPivots*1000
+							});
+
+							markers[node.pivots[i].id]._myCircle = circle;
+
+							circles.push(circle);
+							uiElements.circles.push(circle);
+						}
+					}
+				}
+			});
+		});
+	</script>
+</body>
+</html>
